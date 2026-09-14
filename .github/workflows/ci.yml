@@ -25,7 +25,7 @@ jobs:
     env:
       DATABASE_URL: postgres://meal_test:integration_test_only@127.0.0.1:5432/meal_test
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Rust toolchain
         run: |
           rustup toolchain install 1.96.0 --profile minimal --component rustfmt --component clippy --target wasm32-unknown-unknown
@@ -60,7 +60,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: docker build --tag deccan-table:ci .
       - name: Validate gateway configuration
         run: docker run --rm -e PUBLIC_HOST=meals.example.com -e TLS_EMAIL=admin@example.com -e PROXY_AUTH_SECRET=ci-only-abcdefghijklmnopqrstuvwxyz0123456789 -v "$PWD/deploy/Caddyfile:/etc/caddy/Caddyfile:ro" caddy:2.11.4 caddy validate --config /etc/caddy/Caddyfile
