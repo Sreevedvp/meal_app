@@ -1,0 +1,17 @@
+.git
+.github
+.env
+.env.*
+work
+outputs
+target
+node_modules
+.DS_Store
+**/*.apk
+**/*.aab
+**/*.jks
+**/*.keystore
+**/*.key
+**/*.pem
+**/*.log
+**/*.dump

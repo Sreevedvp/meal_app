@@ -1,0 +1,100 @@
+name: deccan-table-production
+services:
+  db:
+    image: postgres:18.4
+    environment:
+      POSTGRES_DB: meal_planner
+      POSTGRES_USER: meal_admin
+      POSTGRES_PASSWORD: ${DB_ADMIN_PASSWORD:?Set DB_ADMIN_PASSWORD}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?Set APP_DB_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql
+      - ./deploy/init-db.sh:/docker-entrypoint-initdb.d/10-app-role.sh:ro
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U meal_admin -d meal_planner"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+  migrate:
+    image: deccan-table:${APP_IMAGE_TAG:-local}
+    build: .
+    command: ["migrate"]
+    environment:
+      DATABASE_URL: postgres://meal_admin:${DB_ADMIN_PASSWORD:?Set DB_ADMIN_PASSWORD}@db:5432/meal_planner
+    depends_on:
+      db: {condition: service_healthy}
+    networks: [backend]
+    read_only: true
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+  app:
+    image: deccan-table:${APP_IMAGE_TAG:-local}
+    build: .
+    environment:
+      DATABASE_URL: postgres://meal_app:${APP_DB_PASSWORD:?Set APP_DB_PASSWORD}@db:5432/meal_planner
+      PROXY_AUTH_SECRET: ${PROXY_AUTH_SECRET:?Set PROXY_AUTH_SECRET}
+      OIDC_ISSUER_URL: ${OIDC_ISSUER_URL:?Set OIDC_ISSUER_URL}
+      PUBLIC_ORIGIN: https://${PUBLIC_HOST:?Set PUBLIC_HOST}
+      ALLOW_DEMO_DATA: ${ALLOW_DEMO_DATA:-false}
+      MAX_SAVED_PLANS: 100
+      REQUESTS_PER_MINUTE: 120
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    networks: [backend]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+    mem_limit: 1g
+    cpus: 2
+    stop_grace_period: 40s
+  oauth2-proxy:
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.4
+    command: ["--config=/etc/oauth2-proxy.cfg"]
+    environment:
+      OAUTH2_PROXY_OIDC_ISSUER_URL: ${OIDC_ISSUER_URL:?Set OIDC_ISSUER_URL}
+      OAUTH2_PROXY_CLIENT_ID: ${OIDC_CLIENT_ID:?Set OIDC_CLIENT_ID}
+      OAUTH2_PROXY_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:?Set OIDC_CLIENT_SECRET}
+      OAUTH2_PROXY_COOKIE_SECRET: ${OAUTH_COOKIE_SECRET:?Set OAUTH_COOKIE_SECRET}
+      OAUTH2_PROXY_REDIRECT_URL: https://${PUBLIC_HOST:?Set PUBLIC_HOST}/oauth2/callback
+      OAUTH2_PROXY_EMAIL_DOMAINS: ${ALLOWED_EMAIL_DOMAINS:?Set ALLOWED_EMAIL_DOMAINS}
+    volumes: ["./deploy/oauth2-proxy.cfg:/etc/oauth2-proxy.cfg:ro"]
+    networks:
+      edge: {ipv4_address: 172.30.0.3}
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    restart: unless-stopped
+  gateway:
+    image: caddy:2.11.4
+    ports: ["80:80", "443:443", "443:443/udp"]
+    environment:
+      PUBLIC_HOST: ${PUBLIC_HOST:?Set PUBLIC_HOST}
+      TLS_EMAIL: ${TLS_EMAIL:?Set TLS_EMAIL}
+      PROXY_AUTH_SECRET: ${PROXY_AUTH_SECRET:?Set PROXY_AUTH_SECRET}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      edge: {ipv4_address: 172.30.0.2}
+      backend: {}
+    depends_on:
+      app: {condition: service_healthy}
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+networks:
+  edge:
+    ipam:
+      config: [{subnet: 172.30.0.0/24}]
+  backend:
+    internal: true
+volumes:
+  postgres_data:
+  caddy_data:
+  caddy_config:

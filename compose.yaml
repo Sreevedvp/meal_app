@@ -1,0 +1,19 @@
+name: deccan-table
+services:
+  db:
+    image: postgres:18.4
+    environment:
+      POSTGRES_DB: meal_planner
+      POSTGRES_USER: meal_dev
+      POSTGRES_PASSWORD: local_demo_only
+    ports:
+      - "127.0.0.1:55432:5432"
+    volumes:
+      - meal_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U meal_dev -d meal_planner"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+volumes:
+  meal_data:

@@ -1,0 +1,29 @@
+{
+    email {$TLS_EMAIL}
+    admin off
+}
+
+{$PUBLIC_HOST} {
+    encode zstd gzip
+    # Discard client-supplied identity and internal authentication headers.
+    request_header -X-Forwarded-User
+    request_header -X-Proxy-Secret
+    request_header -Authorization
+    handle /signed-out {
+        header Content-Type text/html
+        header Cache-Control no-store
+        respond "<!doctype html><title>Signed out · Deccan Table</title><h1>You are signed out</h1><p>You have signed out of this app.</p><a href='/'>Sign in again</a>" 200
+    }
+    handle {
+        reverse_proxy oauth2-proxy:4180
+    }
+}
+
+# Unpublished internal listener: only the authenticated proxy may reach it.
+http://:8080 {
+    @untrusted not remote_ip 172.30.0.3
+    respond @untrusted "Forbidden" 403
+    reverse_proxy app:8081 {
+        header_up X-Proxy-Secret {$PROXY_AUTH_SECRET}
+    }
+}

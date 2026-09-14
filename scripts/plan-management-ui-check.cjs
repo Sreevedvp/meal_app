@@ -1,0 +1,107 @@
+const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
+const assert=require('node:assert/strict');
+(async()=>{
+ const browser=await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_PATH||undefined});
+ const errors=[];
+ const saved=page=>page.evaluate(()=>JSON.parse(localStorage.getItem('deccan-planner-v1')||'[]'));
+ const id=async page=>(await page.locator('.plan-id').innerText()).replace('Plan ID: ','');
+ const save=async page=>{
+  await page.getByRole('button',{name:'Save calendar'}).click();
+  await page.waitForFunction(()=>document.querySelector('.save-row strong')?.textContent==='Calendar saved');
+ };
+ const setup=async(page,offline=false)=>{
+  page.on('pageerror',e=>errors.push(e.message));
+  if(offline) await page.route('**/api/**',r=>r.abort());
+  await page.goto('http://127.0.0.1:8081');
+  await page.waitForFunction(offline=>document.querySelector('.connection-pill')?.textContent.includes(offline?'Offline ready':'Online'),offline);
+  await page.getByRole('button',{name:/Planner/}).click();
+  await page.waitForFunction(()=>!document.querySelector('#plan-start').disabled);
+  await page.locator('#plan-no-allergens').check();await page.locator('#plan-start').fill('2026-09-01');
+  await page.locator('#plan-length').selectOption('week');await page.getByRole('button',{name:'Generate plan'}).click();
+  await page.locator('.planner-calendar').waitFor();await save(page);
+ };
+ const editDate=async(page,date)=>{
+  await page.getByRole('button',{name:'Edit current plan',exact:true}).click();
+  await page.locator('#plan-start').fill(date);await page.getByRole('button',{name:'Apply plan changes',exact:true}).click();
+  await page.getByRole('button',{name:'Edit current plan',exact:true}).waitFor({state:'visible'});
+ };
+ const copy=async(page,date)=>{
+  await page.getByRole('button',{name:'Copy to new dates',exact:true}).click();
+  await page.locator('#copy-plan-start').fill(date);await page.getByRole('button',{name:'Create dated copy',exact:true}).click();
+  await page.locator('.copy-plan').waitFor({state:'detached'});
+ };
+ const remove=async(page)=>{
+  await page.getByRole('button',{name:'Delete plan',exact:true}).click();
+  await page.getByRole('button',{name:'Delete permanently',exact:true}).click();
+  await page.locator('.delete-confirmation').waitFor({state:'detached'});
+ };
+ try{
+  const page=await browser.newPage({viewport:{width:1440,height:1000}});await setup(page);
+  const originalId=await id(page);const original=(await saved(page))[0];
+  await page.locator('[data-plan-day="0"]').click();await page.getByRole('dialog').waitFor();
+  await page.locator('.planner-meal input[type=checkbox]').first().check();
+  await page.getByRole('button',{name:'Close day details'}).click();await page.locator('#meal-dialog').waitFor({state:'detached'});
+  await save(page);assert.equal(await id(page),originalId);assert.equal((await saved(page)).length,1);
+  await page.getByRole('button',{name:'Edit current plan',exact:true}).click();
+  assert.equal(await page.locator('#plan-start').inputValue(),'2026-09-01');
+  await page.locator('#plan-budget').fill('7000');await page.locator('#plan-budget').blur();
+  await page.getByRole('button',{name:'Cancel editing',exact:true}).click();
+  assert.match(await page.locator('.planner-target-strip').innerText(),/6000/);
+  await editDate(page,'2026-09-10');assert.equal(await id(page),originalId);
+  await page.route('**/api/fitness-plans/*',r=>r.request().method()==='PUT'?r.abort():r.continue());
+  await page.getByRole('button',{name:'Save calendar'}).click();await page.getByRole('alert').waitFor();
+  assert.equal((await (await page.request.get(`http://127.0.0.1:8081/api/fitness-plans/${originalId}`)).json()).plan.request.start_date,'2026-09-01');
+  await page.unroute('**/api/fitness-plans/*');await save(page);
+  const edited=(await saved(page))[0];assert.equal(edited.record.plan.id,originalId);
+  assert.equal(edited.record.plan.request.start_date,'2026-09-10');
+  assert.deepEqual(edited.record.plan.meals,original.record.plan.meals);assert.deepEqual(edited.completed,[]);
+  // A startup catalogue failure must not block later online update retries.
+  await page.route('**/api/catalogue',r=>r.abort());await page.reload();
+  await page.waitForFunction(()=>document.querySelector('.connection-pill')?.textContent.includes('Offline ready'));
+  await page.getByRole('button',{name:/Planner/}).click();await page.locator('.planner-calendar').waitFor();
+  await editDate(page,'2026-09-11');await save(page);assert.equal(await id(page),originalId);
+  await editDate(page,'2026-09-10');await save(page);
+  await page.unroute('**/api/catalogue');await page.reload();
+  await page.waitForFunction(()=>document.querySelector('.connection-pill')?.textContent.includes('Online'));
+  await page.getByRole('button',{name:/Planner/}).click();await page.locator('.planner-calendar').waitFor();
+  await page.getByRole('button',{name:'Edit current plan',exact:true}).click();
+  await page.locator('#plan-budget').fill('7000');await page.locator('#plan-budget').blur();
+  await page.getByRole('button',{name:'Apply plan changes',exact:true}).click();await save(page);
+  assert.equal((await saved(page))[0].record.plan.request.profile.monthly_budget_paise,700000);
+  assert.equal((await saved(page)).length,1);
+  await page.screenshot({path:'outputs/plan-management-desktop.png',fullPage:true});
+  await copy(page,'2026-10-01');assert.equal(await page.locator('.plan-id').count(),0);await save(page);
+  const copyId=await id(page);assert.notEqual(copyId,originalId);assert.equal((await saved(page)).length,2);
+  assert.deepEqual((await saved(page))[0].completed,[]);assert.deepEqual((await saved(page))[0].checked,[]);
+  assert.equal((await saved(page))[1].record.plan.request.start_date,'2026-09-10');
+  assert.deepEqual((await saved(page))[0].record.plan.meals,(await saved(page))[1].record.plan.meals);
+  await page.getByRole('button',{name:'Delete plan',exact:true}).click();await page.getByRole('button',{name:'Cancel deletion'}).click();
+  assert.equal(await id(page),copyId);
+  await page.route('**/api/fitness-plans/*',r=>r.request().method()==='DELETE'?r.abort():r.continue());
+  await page.getByRole('button',{name:'Delete plan',exact:true}).click();await page.getByRole('button',{name:'Delete permanently'}).click();
+  await page.getByRole('alert').waitFor();assert.equal(await id(page),copyId);assert.equal((await saved(page)).length,2);
+  await page.unroute('**/api/fitness-plans/*');await page.getByRole('button',{name:'Delete permanently'}).click();
+  await page.locator('.delete-confirmation').waitFor({state:'detached'});
+  assert.equal(await page.locator('.planner-calendar').count(),0);assert.equal((await saved(page)).length,1);
+  assert.equal((await page.request.get(`http://127.0.0.1:8081/api/fitness-plans/${copyId}`)).status(),404);
+  assert.equal((await page.request.get(`http://127.0.0.1:8081/api/fitness-plans/${originalId}`)).status(),200);
+  await page.locator('.saved-calendars summary').click();await page.getByRole('button',{name:'Edit saved plan'}).click();
+  assert.equal(await page.locator('#plan-start').inputValue(),'2026-09-10');await page.getByRole('button',{name:'Cancel editing'}).click();
+  await copy(page,'2026-11-01');
+  await page.getByRole('button',{name:'Delete saved plan'}).click();await page.getByRole('button',{name:'Delete permanently'}).click();
+  await page.locator('.delete-confirmation').waitFor({state:'detached'});
+  assert.equal((await saved(page)).length,0);assert.equal(await page.locator('.planner-calendar').count(),1);
+  await remove(page);assert.equal(await page.locator('.planner-calendar').count(),0);
+  const ctx=await browser.newContext({viewport:{width:390,height:844}});const op=await ctx.newPage();await setup(op,true);
+  const localId=await id(op);assert.match(localId,/^local-/);await editDate(op,'2026-12-01');await save(op);
+  assert.equal(await id(op),localId);assert.equal((await saved(op)).length,1);
+  await copy(op,'2027-01-01');await save(op);assert.notEqual(await id(op),localId);await remove(op);
+  await op.reload();await op.getByRole('button',{name:/Planner/}).click();await op.locator('.planner-calendar').waitFor();
+  assert.equal(await id(op),localId);assert.match(await op.locator('.calendar-heading').innerText(),/December 2026/);
+  await op.getByRole('button',{name:'Copy to new dates'}).click();await op.screenshot({path:'outputs/plan-management-mobile.png',fullPage:true});
+  assert.equal(await op.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+  await op.getByRole('button',{name:'Cancel copy'}).click();await remove(op);assert.equal((await saved(op)).length,0);
+  assert.deepEqual(errors,[]);
+  console.log('PASS: edit/cancel, same-ID online and local saves, date-only meal preservation, budget changes, copy with fresh progress, deletion/cancel/failure/retry, inactive-plan deletion, unsaved-draft deletion, reload and mobile layout.');
+ }finally{await browser.close();}
+})().catch(e=>{console.error(e);process.exit(1)});

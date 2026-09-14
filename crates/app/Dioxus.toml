@@ -1,0 +1,11 @@
+[application]
+name = "Deccan Table"
+default_platform = "web"
+
+[web.app]
+title = "Deccan Table · Fuel your goals"
+
+[bundle]
+identifier = "dev.deccantable.prototype"
+publisher = "Deccan Table"
+

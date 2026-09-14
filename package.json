@@ -1,0 +1,8 @@
+{
+  "name": "deccan-table-browser-checks",
+  "private": true,
+  "scripts": {
+    "test:browser": "node scripts/fitness-ui-check.cjs && node scripts/planner-ui-check.cjs && node scripts/plan-management-ui-check.cjs"
+  },
+  "devDependencies": { "playwright": "1.62.1" }
+}

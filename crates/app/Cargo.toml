@@ -1,0 +1,21 @@
+[package]
+name = "meal-app"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+meal-domain.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+dioxus = { version = "=0.7.10", default-features = false, features = ["macro", "html", "signals", "hooks", "launch", "mounted", "document", "asset"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+[features]
+default = []
+web = ["dioxus/web"]
+mobile = ["dioxus/mobile"]
+
+
+# Dioxus 0.7.10's minimal web feature set uses Location without enabling it.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+web-sys = { version = "0.3", features = ["Window", "Location"] }

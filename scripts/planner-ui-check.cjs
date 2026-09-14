@@ -1,0 +1,147 @@
+const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
+const assert=require('node:assert/strict');
+(async()=>{
+ const browser=await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_PATH||undefined});
+ try{
+ const openDay=async(p,day)=>{
+   await p.locator(`[data-plan-day="${day}"]`).click();
+   await p.waitForFunction(()=>document.querySelector('#meal-dialog')?.matches(':modal'));
+   assert.equal(await p.getByRole('dialog').isVisible(),true);
+ };
+ const closeDay=async p=>{
+   await p.getByRole('button',{name:'Close day details',exact:true}).click();
+   await p.locator('#meal-dialog').waitFor({state:'detached'});
+ };
+ const page=await browser.newPage({viewport:{width:1440,height:1100}});const errors=[];page.on('pageerror',e=>errors.push(e.message));
+ await page.goto('http://127.0.0.1:8081');
+ await page.waitForFunction(()=>document.querySelector('.connection-pill')?.innerText.includes('Online'));
+ await page.getByRole('button',{name:/Planner/}).click();
+ await page.waitForFunction(()=>!document.querySelector('#plan-start').disabled);
+ assert.equal(await page.locator('#api-url, .connection-settings').count(),0);
+ for(const id of ['plan-calories','plan-protein','plan-budget']) assert.equal(await page.locator('#'+id).isVisible(),true);
+ assert.equal(await page.getByRole('button',{name:'Generate plan'}).isDisabled(),true);
+ await page.locator('#plan-no-allergens').check();
+ await page.screenshot({path:'outputs/planner-setup.png',fullPage:true});
+ await page.locator('#plan-start').fill('2026-12-28');await page.locator('#plan-length').selectOption('week');
+ await page.getByRole('button',{name:'Generate plan'}).click();await page.locator('.planner-calendar').waitFor();
+ assert.equal(await page.locator('.calendar-grid th').count(),7);
+ assert.equal(await page.locator('.calendar-date').count(),4);
+ assert.equal(await page.locator('.planner-meal').count(),0);
+ assert.match(await page.locator('.calendar-heading').innerText(),/December 2026/);
+ assert.equal(await page.getByRole('button',{name:'Previous month'}).isDisabled(),true);
+ const names=[];
+ for(let day=0;day<7;day++) {
+   if(day===4) await page.getByRole('button',{name:'Next month'}).click();
+   await openDay(page,day);
+   names.push(...await page.locator('.planner-meal h4').allTextContents());
+   if(day===6) assert.match(await page.locator('#meal-dialog-title').innerText(),/2027-01-03/);
+   await closeDay(page);
+   assert.equal(await page.evaluate(()=>document.activeElement.dataset.planDay),String(day));
+ }
+ assert.equal(new Set(names).size,21);
+ assert.equal(await page.getByRole('button',{name:'Next month'}).isDisabled(),true);
+ await page.getByRole('button',{name:'Previous month'}).click();
+ await openDay(page,0);
+ // Native modal focus stays inside while tabbing; Escape restores the date button.
+ for(let i=0;i<6;i++){await page.keyboard.press('Tab');assert.equal(await page.evaluate(()=>document.querySelector('#meal-dialog').contains(document.activeElement)),true);}
+ await page.keyboard.press('Escape');await page.locator('#meal-dialog').waitFor({state:'detached'});
+ assert.equal(await page.evaluate(()=>document.activeElement.dataset.planDay),'0');
+ await openDay(page,0);await page.mouse.click(2,2);await page.locator('#meal-dialog').waitFor({state:'detached'});
+ await openDay(page,0);
+ await page.locator('.planner-meal input[type=checkbox]').first().check();
+ await page.getByRole('button',{name:'Swap meal',exact:true}).first().click();
+ await page.locator('.planner-swap-option').first().waitFor();
+ await page.locator('.planner-swap-option').first().click();
+ assert.notEqual(await page.locator('.planner-meal h4').first().innerText(),names[0]);
+ assert.equal(await page.locator('.planner-meal input[type=checkbox]').first().isChecked(),false);
+ await page.locator('.planner-meal input[type=checkbox]').first().check();
+ await page.screenshot({path:'outputs/planner-popup-desktop.png'});
+ await closeDay(page);
+ assert.match(await page.locator('[data-plan-day="0"]').getAttribute('aria-label'),/1 completed/);
+ await page.getByRole('button',{name:'Shopping & budget',exact:true}).click();
+ assert.equal(await page.locator('.shopping-week').count(),1);
+ await page.locator('.shopping-week input[type=checkbox]:enabled').first().check();
+ await page.getByRole('button',{name:'Save calendar'}).click();
+ await page.waitForFunction(()=>document.querySelector('.plan-id')?.innerText.match(/[0-9a-f]{8}-[0-9a-f-]{27,}/));
+ const firstId=(await page.locator('.plan-id').innerText()).replace('Plan ID: ','');
+ await page.waitForFunction(()=>document.querySelector('.results').innerText.includes('Calendar and progress saved on this device.'));
+ await page.reload();await page.getByRole('button',{name:/Planner/}).click();await page.locator('.planner-calendar').waitFor();
+ await openDay(page,0);
+ assert.equal(await page.locator('.planner-meal input[type=checkbox]').first().isChecked(),true);
+ await closeDay(page);
+ assert.match(await page.locator('.plan-id').innerText(),new RegExp(firstId));
+ await page.getByRole('button',{name:'Shopping & budget',exact:true}).click();
+ assert.equal(await page.locator('.shopping-week input[type=checkbox]:enabled').first().isChecked(),true);
+ // Reopen the immutable database copy by ID, independently of the local archive.
+ await page.locator('.saved-calendars summary').click();
+ await page.getByRole('button',{name:'Browse online calendars',exact:true}).click();
+ await page.locator('.online-calendars button').first().waitFor();
+ await page.waitForFunction(()=>!document.querySelector('.online-calendars button').disabled);
+ await page.locator('.online-calendars button').first().click();
+ await page.waitForFunction(()=>document.querySelector('.results').innerText.includes('Database calendar opened.'));
+ assert.match(await page.locator('.plan-id').innerText(),new RegExp(firstId));
+ await page.locator('#restore-plan').fill(firstId);
+ await page.getByRole('button',{name:'Open saved plan',exact:true}).click();
+ await page.waitForFunction(()=>document.querySelector('.results').innerText.includes('Database calendar opened.'));
+ await page.locator('.saved-calendars summary').click();
+ // Monthly plan, partial final week, carried packs, and responsive layout.
+ await page.getByRole('button',{name:'Edit goals & preferences'}).click();await page.locator('#plan-no-allergens').check();await page.locator('#plan-start').fill('2026-09-01');
+ await page.locator('#plan-length').selectOption('month');await page.getByRole('button',{name:'Generate plan'}).click();
+ await page.getByRole('button',{name:'Shopping & budget',exact:true}).click();await page.locator('#plan-week').selectOption('4');
+ assert.match(await page.locator('.shopping-week').innerText(),/2 days/);
+ await page.locator('#plan-week').selectOption('all');assert.equal(await page.locator('.shopping-week').count(),5);
+ await page.screenshot({path:'outputs/planner-shopping.png',fullPage:true});
+ await page.getByRole('button',{name:'Meal calendar',exact:true}).click();
+ assert.equal(await page.locator('.calendar-date').count(),30);
+ await page.screenshot({path:'outputs/planner-desktop.png',fullPage:true});
+ await page.setViewportSize({width:390,height:844});await page.screenshot({path:'outputs/planner-mobile.png',fullPage:true});
+ assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+ await openDay(page,29);
+ await page.screenshot({path:'outputs/planner-popup-mobile.png'});
+ assert.equal(await page.evaluate(()=>{const d=document.querySelector('#meal-dialog');return d.scrollWidth<=d.clientWidth&&d.getBoundingClientRect().bottom<=innerHeight;}),true);
+ await page.locator('.planner-meal input[type=checkbox]').last().check();
+ await page.locator('.planner-meal details summary').last().click();
+ assert.equal(await page.locator('.planner-meal details').last().getAttribute('open')!==null,true);
+ await closeDay(page);
+ assert.match(await page.locator('[data-plan-day="29"]').getAttribute('aria-label'),/1 completed/);
+ // Changing settings preserves the existing draft and budget-first rejects an impossible budget.
+ await page.getByRole('button',{name:/Nutrition & budget/}).click();await page.locator('#budget').fill('1');await page.getByText('Budget first',{exact:true}).click();
+ await page.getByRole('button',{name:/Planner/}).click();await page.locator('.planner-stale').waitFor();
+ await page.locator('#plan-no-allergens').check();
+ const before=await page.locator('.calendar-dishes').allTextContents();
+ await page.getByRole('button',{name:'Generate plan'}).click();await page.getByRole('alert').waitFor();
+ assert.match(await page.getByRole('alert').innerText(),/budget/);assert.deepEqual(await page.locator('.calendar-dishes').allTextContents(),before);
+ assert.deepEqual(errors,[]);
+ // Fresh context with API unavailable: generation, save and reload remain usable.
+ const offline=await browser.newContext();const op=await offline.newPage();op.on('pageerror',e=>errors.push(e.message));
+ await op.route('**/api/**',r=>r.abort());await op.goto('http://127.0.0.1:8081');await op.getByRole('button',{name:/Planner/}).click();
+ await op.waitForFunction(()=>!document.querySelector('#plan-start').disabled);await op.locator('#plan-length').selectOption('week');
+ await op.locator('#plan-no-allergens').check();
+ await op.locator('.planner-allergens').getByRole('checkbox',{name:'peanut',exact:true}).check();
+ assert.equal(await op.locator('#plan-no-allergens').isChecked(),false);
+ await op.locator('#plan-calories').fill('2200');await op.locator('#plan-protein').fill('110');
+ await op.locator('#plan-budget').fill('6500.05');await op.locator('#plan-budget').blur();
+ await op.locator('#plan-month-days').selectOption('31');
+ await op.setViewportSize({width:390,height:844});
+ await op.screenshot({path:'outputs/planner-setup-mobile.png',fullPage:true});
+ assert.equal(await op.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+ await op.getByRole('button',{name:'Generate plan'}).click();await op.locator('.planner-calendar').waitFor();
+ await op.getByRole('button',{name:'Save calendar'}).click();await op.waitForFunction(()=>document.querySelector('.plan-id')?.innerText.includes('local-'));
+ const offlineProfile=await op.evaluate(()=>JSON.parse(localStorage.getItem('deccan-planner-v1'))[0].record.plan.request.profile);
+ assert.equal(offlineProfile.monthly_budget_paise,650005);assert.equal(offlineProfile.month_days,31);
+ assert.deepEqual(offlineProfile.allergens,['peanut']);
+ assert.ok(Math.abs(offlineProfile.targets.reduce((n,t)=>n+t.nutrition.calories_kcal,0)-2200)<0.01);
+ assert.ok(Math.abs(offlineProfile.targets.reduce((n,t)=>n+t.nutrition.protein_g,0)-110)<0.01);
+ await op.getByRole('button',{name:/Nutrition & budget/}).click();
+ assert.equal(await op.locator('#budget').inputValue(),'6500.05');
+ await op.locator('#target-period').selectOption('month');
+ await op.getByRole('button',{name:/Planner/}).click();
+ await op.locator('#plan-month-days').selectOption('28');
+ await op.getByRole('button',{name:/Nutrition & budget/}).click();
+ assert.equal(await op.locator('#target-period').inputValue(),'month');
+ assert.equal(await op.locator('#total-protein').inputValue(),'3080.0');
+ await op.reload();await op.getByRole('button',{name:/Planner/}).click();await op.locator('.planner-calendar').waitFor();assert.equal(await op.locator('.planner-meal').count(),0);await openDay(op,0);assert.equal(await op.locator('.planner-meal').count(),3);await closeDay(op);
+ assert.deepEqual(errors,[]);
+ console.log('PASS: modal date details, close/Escape/backdrop dismissal, keyboard focus containment/restoration, mobile popup scrolling, dated weekly/monthly calendars, 21 distinct meals, constrained swaps, progress, shopping, database/local save and restore, partial weeks, draft preservation, budget rejection, offline use and mobile layout.');
+ }finally{await browser.close();}
+})().catch(e=>{console.error(e);process.exit(1)});
