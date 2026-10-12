@@ -71,7 +71,7 @@ services:
     cap_drop: [ALL]
     restart: unless-stopped
   gateway:
-    image: caddy:2.11.4
+    image: caddy:2.11.7
     ports: ["80:80", "443:443", "443:443/udp"]
     environment:
       PUBLIC_HOST: ${PUBLIC_HOST:?Set PUBLIC_HOST}
