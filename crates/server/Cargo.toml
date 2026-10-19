@@ -10,7 +10,7 @@ serde_json.workspace = true
 axum = "0.8"
 tokio = { version = "1", features = ["full"] }
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres", "json", "migrate", "macros", "uuid"] }
-sha2 = "0.10"
+sha2 = "0.11"
 subtle = "2.6"
 uuid = { version = "1", features = ["v4", "serde"] }
 tower-http = { version = "0.6", features = ["cors", "fs", "trace"] }
